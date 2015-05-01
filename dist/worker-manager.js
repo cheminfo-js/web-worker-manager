@@ -1,6 +1,6 @@
 /**
  * worker-manager - Worker manager
- * @version v0.0.1
+ * @version v0.0.2
  * @link https://github.com/cheminfo-js/worker-manager
  * @license MIT
  */
@@ -35,10 +35,14 @@ function WorkerManager(func, options) {
     var deps = options.deps;
     if (typeof deps === 'string')
         deps = [deps];
+    if (!Array.isArray(deps))
+        deps = undefined;
 
+    this._id = 0;
     this._terminated = false;
     this._working = 0;
     this._waiting = [];
+    this._callbacks = {};
 
     this._init(deps);
 
@@ -52,7 +56,6 @@ WorkerManager.prototype._init = function (deps) {
         var worker = new Worker(workerURL);
         worker.postMessage({
             action: 'init',
-            id: i,
             deps: deps
         });
         worker.onmessage = this._onmessage.bind(this, worker);
@@ -66,10 +69,12 @@ WorkerManager.prototype._init = function (deps) {
 };
 
 WorkerManager.prototype._onerror = function (worker, error) {
+
     if (this._terminated)
         return;
     this._working--;
-    worker.currentCallback(error);
+    //TODO find a way to detect which run has failed or cancel and notify all current runs for this worker
+    //worker.currentCallback(error);
     worker.running = false;
     if (this._terminateOnError) {
         this.terminate();
@@ -82,8 +87,11 @@ WorkerManager.prototype._onmessage = function (worker, event) {
     if (this._terminated)
         return;
     this._working--;
-    worker.currentCallback(null, event.data);
-    worker.running = false;
+    if (this._callbacks[event.data.id]) {
+        this._callbacks[event.data.id](null, event.data.data);
+        delete this._callbacks[event.data.id];
+        worker.running = false;
+    }
     this._exec();
 };
 
@@ -92,16 +100,18 @@ WorkerManager.prototype._exec = function () {
         return;
     for (var i = 0; i < this._numWorkers; i++) {
         if (!this._workers[i].running) {
+            var id = this._id++;
             var execInfo = this._waiting.shift();
             var worker = this._workers[i];
             worker.postMessage({
                 action: 'exec',
+                id: id,
                 event: execInfo[0],
                 args: execInfo[1]
             });
             worker.running = true;
             worker.time = Date.now();
-            worker.currentCallback = execInfo[2] || noop;
+            this._callbacks[id] = execInfo[2] || noop;
             this._working++;
             break;
         }
@@ -120,6 +130,9 @@ WorkerManager.prototype.terminate = function () {
 WorkerManager.prototype.postAll = function (event, args) {
     if (this._terminated)
         throw new Error('Cannot post (terminated)');
+    args = args || [];
+    if (!Array.isArray(args))
+        args = [args];
     for (var i = 0; i < this._numWorkers; i++) {
         this._workers[i].postMessage({
             action: 'exec',
@@ -132,6 +145,12 @@ WorkerManager.prototype.postAll = function (event, args) {
 WorkerManager.prototype.post = function (event, args, callback) {
     if (this._terminated)
         throw new Error('Cannot post (terminated)');
+    if (typeof args === 'function') {
+        callback = args;
+        args = [];
+    } else if (!Array.isArray(args)) {
+        args = [args];
+    }
     this._waiting.push([event, args, callback]);
     this._exec();
 };
@@ -144,7 +163,6 @@ module.exports = WorkerManager;
 var worker = function () {
     self.window = self;
     function ManagedWorker() {
-        this._id = -1;
         this._listeners = {};
     }
     ManagedWorker.prototype.on = function (event, callback) {
@@ -154,10 +172,13 @@ var worker = function () {
             throw new TypeError('callback argument must be a function');
         this._listeners[event] = callback;
     };
-    ManagedWorker.prototype.send = function (data) {
-        self.postMessage(data);
+    ManagedWorker.prototype._send = function (id, data) {
+        self.postMessage({
+            id: id,
+            data: data
+        });
     };
-    ManagedWorker.prototype.trigger = function (event, args) {
+    ManagedWorker.prototype._trigger = function (event, args) {
         if (!this._listeners[event])
             throw new Error('event ' + event + ' is not defined');
         this._listeners[event].apply(null, args);
@@ -166,16 +187,18 @@ var worker = function () {
     self.onmessage = function (event) {
         switch(event.data.action) {
             case 'init':
-                worker._id = event.data.id;
                 if (event.data.deps) {
                     importScripts.apply(self, event.data.deps);
                 }
                 break;
             case 'exec':
-                worker.trigger(event.data.event, event.data.args);
+                event.data.args.unshift(function (data) {
+                    worker._send(event.data.id, data);
+                });
+                worker._trigger(event.data.event, event.data.args);
                 break;
             case 'ping':
-                worker.send('pong');
+                worker.send(event.data.id, 'pong');
                 break;
         }
     };
