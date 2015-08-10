@@ -26,11 +26,6 @@ var worker = function () {
     var worker = new ManagedWorker();
     self.onmessage = function (event) {
         switch(event.data.action) {
-            case 'init':
-                if (event.data.deps) {
-                    importScripts.apply(self, event.data.deps);
-                }
-                break;
             case 'exec':
                 event.data.args.unshift(function (data) {
                     worker._send(event.data.id, data);
@@ -47,7 +42,7 @@ var worker = function () {
 
 var workerStr = worker.toString().split('(("CODE"))');
 
-exports.newWorkerURL = function newWorkerURL(code) {
-    var blob = new Blob(['(', workerStr[0], '(', code, ')();', workerStr[1], ')();'], {type: 'application/javascript'});
+exports.newWorkerURL = function newWorkerURL(code, deps) {
+    var blob = new Blob(['importScripts.apply(self, ' + JSON.stringify(deps) + ');(', workerStr[0], '(', code, ')();', workerStr[1], ')();'], {type: 'application/javascript'});
     return URL.createObjectURL(blob);
 };

@@ -43,14 +43,10 @@ function WorkerManager(func, options) {
 
 WorkerManager.prototype._init = function (deps) {
 
-    var workerURL = workerTemplate.newWorkerURL(this._workerCode);
+    var workerURL = workerTemplate.newWorkerURL(this._workerCode, deps);
 
     for (var i = 0; i < this._numWorkers; i++) {
         var worker = new Worker(workerURL);
-        worker.postMessage({
-            action: 'init',
-            deps: deps
-        });
         worker.onmessage = this._onmessage.bind(this, worker);
         worker.onerror = this._onerror.bind(this, worker);
         worker.running = false;
