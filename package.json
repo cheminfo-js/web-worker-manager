@@ -18,12 +18,9 @@
     "lib": "src"
   },
   "scripts": {
-    "build": "cheminfo build --root WorkerManager"
+    "build": "cheminfo build --root WorkerManager --no-uglify"
   },
   "devDependencies": {
-    "cheminfo-tools": "^1.0.2",
-    "mocha": "^2.2.5",
-    "mocha-better-spec-reporter": "^2.1.1",
-    "should": "^7.0.2"
+    "cheminfo-tools": "^1.0.2"
   }
 }
