@@ -10,7 +10,7 @@ function noop() {
 function WorkerManager(func, options) {
 
     // Check arguments
-    if (typeof func !== 'function')
+    if (typeof func !== 'string' && typeof func !== 'function')
         throw new TypeError('func argument must be a function');
     if (options === undefined)
         options = {};
