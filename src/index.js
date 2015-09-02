@@ -45,6 +45,7 @@ WorkerManager.prototype._init = function (deps) {
         worker.onmessage = this._onmessage.bind(this, worker);
         worker.onerror = this._onerror.bind(this, worker);
         worker.running = false;
+        worker.id = i;
         this._workers.set(worker, null);
     }
 
@@ -58,7 +59,7 @@ WorkerManager.prototype._onerror = function (worker, error) {
     worker.running = false;
     var callback = this._workers.get(worker);
     if (callback) {
-        callback(error);
+        callback[1](error);
     }
     this._workers.set(worker, null);
     if (this._terminateOnError) {
@@ -75,41 +76,47 @@ WorkerManager.prototype._onmessage = function (worker, event) {
     worker.running = false;
     var callback = this._workers.get(worker);
     if (callback) {
-        callback(null, event.data.data);
+        callback[0](event.data.data);
     }
     this._workers.set(worker, null);
     this._exec();
 };
 
 WorkerManager.prototype._exec = function () {
-    if (this._working === this._numWorkers ||
-        this._waiting.length === 0) {
-        return;
-    }
     for (var worker of this._workers.keys()) {
+        if (this._working === this._numWorkers ||
+            this._waiting.length === 0) {
+            return;
+        }
         if (!worker.running) {
-            var execInfo = this._waiting.shift();
-            worker.postMessage({
-                action: 'exec',
-                id: id,
-                event: execInfo[0],
-                args: execInfo[1]
-            });
-            worker.running = true;
-            worker.time = Date.now();
-            this._workers.set(worker, execInfo[2] || noop);
-            this._working++;
-            break;
+            for (var i = 0; i < this._waiting.length; i++) {
+                var execInfo = this._waiting[i];
+                if (typeof execInfo[3] === 'number' && execInfo[3] !== worker.id) {
+                    // this message is intended to another worker, let's ignore it
+                    continue;
+                }
+                this._waiting.splice(i, 1);
+                worker.postMessage({
+                    action: 'exec',
+                    event: execInfo[0],
+                    args: execInfo[1]
+                });
+                worker.running = true;
+                worker.time = Date.now();
+                this._workers.set(worker, execInfo[2]);
+                this._working++;
+                break;
+            }
         }
     }
 };
 
 WorkerManager.prototype.terminate = function () {
-    if (this._terminated) throw new Error('Already terminated');
+    if (this._terminated) return;
     for (var entry of this._workers) {
         entry[0].terminate();
         if (entry[1]) {
-            entry[1](new Error('Terminated'));
+            entry[1][1](new Error('Terminated'));
         }
     }
     this._workers.clear();
@@ -118,37 +125,28 @@ WorkerManager.prototype.terminate = function () {
     this._terminated = true;
 };
 
-/*
-TODO change this to use post internally so there is never more than one message
-sent at the same time to the worker
- */
-/*
 WorkerManager.prototype.postAll = function (event, args) {
     if (this._terminated)
         throw new Error('Cannot post (terminated)');
-    args = args || [];
-    if (!Array.isArray(args))
-        args = [args];
+    var promises = [];
     for (var worker of this._workers.keys()) {
-        worker.postMessage({
-            action: 'exec',
-            event: event,
-            args: args
-        });
+        promises.push(this.post(event, args, worker.id));
     }
+    return Promise.all(promises);
 };
-*/
 
-WorkerManager.prototype.post = function (event, args, callback) {
-    if (this._terminated) throw new Error('Cannot post (terminated)');
-    if (typeof args === 'function') {
-        callback = args;
-        args = [];
-    } else if (!Array.isArray(args)) {
+WorkerManager.prototype.post = function (event, args, id) {
+    if (args === undefined) args = [];
+    if (!Array.isArray(args)) {
         args = [args];
     }
-    this._waiting.push([event, args, callback]);
-    this._exec();
+
+    var self = this;
+    return new Promise(function (resolve, reject) {
+        if (self._terminated) throw new Error('Cannot post (terminated)');
+        self._waiting.push([event, args, [resolve, reject], id]);
+        self._exec();
+    });
 };
 
 module.exports = WorkerManager;
