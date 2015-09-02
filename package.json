@@ -21,6 +21,6 @@
     "build": "cheminfo build --root WorkerManager --no-uglify"
   },
   "devDependencies": {
-    "cheminfo-tools": "^1.0.2"
+    "cheminfo-tools": "^1.2.1"
   }
 }

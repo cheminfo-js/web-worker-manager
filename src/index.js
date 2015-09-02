@@ -4,11 +4,9 @@ var workerTemplate = require('./workerTemplate');
 
 var CORES = navigator.hardwareConcurrency || 1;
 
-function noop() {
-}
+var noop = Function.prototype;
 
 function WorkerManager(func, options) {
-
     // Check arguments
     if (typeof func !== 'string' && typeof func !== 'function')
         throw new TypeError('func argument must be a function');
@@ -21,7 +19,7 @@ function WorkerManager(func, options) {
 
     // Parse options
     this._numWorkers = (options.maxWorkers > 0) ? Math.min(options.maxWorkers, CORES) : CORES;
-    this._workers = new Array(this._numWorkers);
+    this._workers = new Map();
     this._timeout = options.timeout || 0;
     this._terminateOnError = !!options.terminateOnError;
 
@@ -35,14 +33,11 @@ function WorkerManager(func, options) {
     this._terminated = false;
     this._working = 0;
     this._waiting = [];
-    this._callbacks = {};
 
     this._init(deps);
-
 }
 
 WorkerManager.prototype._init = function (deps) {
-
     var workerURL = workerTemplate.newWorkerURL(this._workerCode, deps);
 
     for (var i = 0; i < this._numWorkers; i++) {
@@ -50,21 +45,22 @@ WorkerManager.prototype._init = function (deps) {
         worker.onmessage = this._onmessage.bind(this, worker);
         worker.onerror = this._onerror.bind(this, worker);
         worker.running = false;
-        this._workers[i] = worker;
+        this._workers.set(worker, null);
     }
 
     URL.revokeObjectURL(workerURL);
-
 };
 
 WorkerManager.prototype._onerror = function (worker, error) {
-
     if (this._terminated)
         return;
     this._working--;
-    //TODO find a way to detect which run has failed or cancel and notify all current runs for this worker
-    //worker.currentCallback(error);
     worker.running = false;
+    var callback = this._workers.get(worker);
+    if (callback) {
+        callback(error);
+    }
+    this._workers.set(worker, null);
     if (this._terminateOnError) {
         this.terminate();
     } else {
@@ -76,22 +72,23 @@ WorkerManager.prototype._onmessage = function (worker, event) {
     if (this._terminated)
         return;
     this._working--;
-    if (this._callbacks[event.data.id]) {
-        this._callbacks[event.data.id](null, event.data.data);
-        delete this._callbacks[event.data.id];
-        worker.running = false;
+    worker.running = false;
+    var callback = this._workers.get(worker);
+    if (callback) {
+        callback(null, event.data.data);
     }
+    this._workers.set(worker, null);
     this._exec();
 };
 
 WorkerManager.prototype._exec = function () {
-    if (this._working === this._numWorkers || this._waiting.length === 0)
+    if (this._working === this._numWorkers ||
+        this._waiting.length === 0) {
         return;
-    for (var i = 0; i < this._numWorkers; i++) {
-        if (!this._workers[i].running) {
-            var id = this._id++;
+    }
+    for (var worker of this._workers.keys()) {
+        if (!worker.running) {
             var execInfo = this._waiting.shift();
-            var worker = this._workers[i];
             worker.postMessage({
                 action: 'exec',
                 id: id,
@@ -100,7 +97,7 @@ WorkerManager.prototype._exec = function () {
             });
             worker.running = true;
             worker.time = Date.now();
-            this._callbacks[id] = execInfo[2] || noop;
+            this._workers.set(worker, execInfo[2] || noop);
             this._working++;
             break;
         }
@@ -108,32 +105,42 @@ WorkerManager.prototype._exec = function () {
 };
 
 WorkerManager.prototype.terminate = function () {
-    if (this._terminated)
-        return;
-    for (var i = 0; i < this._numWorkers; i++) {
-        this._workers[i].terminate();
+    if (this._terminated) throw new Error('Already terminated');
+    for (var entry of this._workers) {
+        entry[0].terminate();
+        if (entry[1]) {
+            entry[1](new Error('Terminated'));
+        }
     }
+    this._workers.clear();
+    this._waiting = [];
+    this._working = 0;
     this._terminated = true;
 };
 
+/*
+TODO change this to use post internally so there is never more than one message
+sent at the same time to the worker
+ */
+/*
 WorkerManager.prototype.postAll = function (event, args) {
     if (this._terminated)
         throw new Error('Cannot post (terminated)');
     args = args || [];
     if (!Array.isArray(args))
         args = [args];
-    for (var i = 0; i < this._numWorkers; i++) {
-        this._workers[i].postMessage({
+    for (var worker of this._workers.keys()) {
+        worker.postMessage({
             action: 'exec',
             event: event,
             args: args
         });
     }
 };
+*/
 
 WorkerManager.prototype.post = function (event, args, callback) {
-    if (this._terminated)
-        throw new Error('Cannot post (terminated)');
+    if (this._terminated) throw new Error('Cannot post (terminated)');
     if (typeof args === 'function') {
         callback = args;
         args = [];
