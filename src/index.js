@@ -59,7 +59,7 @@ WorkerManager.prototype._onerror = function (worker, error) {
     worker.running = false;
     var callback = this._workers.get(worker);
     if (callback) {
-        callback[1](error);
+        callback[1](error.message);
     }
     this._workers.set(worker, null);
     if (this._terminateOnError) {
