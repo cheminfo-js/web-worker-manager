@@ -1,7 +1,7 @@
 'use strict';
 
 var worker = function () {
-    self.window = self;
+    var window = self.window = self;
     function ManagedWorker() {
         this._listeners = {};
     }
@@ -43,6 +43,6 @@ var worker = function () {
 var workerStr = worker.toString().split('(("CODE"))');
 
 exports.newWorkerURL = function newWorkerURL(code, deps) {
-    var blob = new Blob(['importScripts.apply(self, ' + JSON.stringify(deps) + ');(', workerStr[0], '(', code, ')();', workerStr[1], ')();'], {type: 'application/javascript'});
+    var blob = new Blob(['(', workerStr[0], 'importScripts.apply(self, ' + JSON.stringify(deps) + ');\n', '(', code, ')();', workerStr[1], ')();'], {type: 'application/javascript'});
     return URL.createObjectURL(blob);
 };
