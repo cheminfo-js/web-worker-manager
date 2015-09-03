@@ -2,7 +2,7 @@
 	if(typeof exports === 'object' && typeof module === 'object')
 		module.exports = factory();
 	else if(typeof define === 'function' && define.amd)
-		define(factory);
+		define([], factory);
 	else if(typeof exports === 'object')
 		exports["WorkerManager"] = factory();
 	else
@@ -60,11 +60,9 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	var CORES = navigator.hardwareConcurrency || 1;
 
-	function noop() {
-	}
+	var noop = Function.prototype;
 
 	function WorkerManager(func, options) {
-
 	    // Check arguments
 	    if (typeof func !== 'string' && typeof func !== 'function')
 	        throw new TypeError('func argument must be a function');
@@ -77,7 +75,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	    // Parse options
 	    this._numWorkers = (options.maxWorkers > 0) ? Math.min(options.maxWorkers, CORES) : CORES;
-	    this._workers = new Array(this._numWorkers);
+	    this._workers = new Map();
 	    this._timeout = options.timeout || 0;
 	    this._terminateOnError = !!options.terminateOnError;
 
@@ -91,14 +89,11 @@ return /******/ (function(modules) { // webpackBootstrap
 	    this._terminated = false;
 	    this._working = 0;
 	    this._waiting = [];
-	    this._callbacks = {};
 
 	    this._init(deps);
-
 	}
 
 	WorkerManager.prototype._init = function (deps) {
-
 	    var workerURL = workerTemplate.newWorkerURL(this._workerCode, deps);
 
 	    for (var i = 0; i < this._numWorkers; i++) {
@@ -106,21 +101,23 @@ return /******/ (function(modules) { // webpackBootstrap
 	        worker.onmessage = this._onmessage.bind(this, worker);
 	        worker.onerror = this._onerror.bind(this, worker);
 	        worker.running = false;
-	        this._workers[i] = worker;
+	        worker.id = i;
+	        this._workers.set(worker, null);
 	    }
 
 	    URL.revokeObjectURL(workerURL);
-
 	};
 
 	WorkerManager.prototype._onerror = function (worker, error) {
-
 	    if (this._terminated)
 	        return;
 	    this._working--;
-	    //TODO find a way to detect which run has failed or cancel and notify all current runs for this worker
-	    //worker.currentCallback(error);
 	    worker.running = false;
+	    var callback = this._workers.get(worker);
+	    if (callback) {
+	        callback[1](error.message);
+	    }
+	    this._workers.set(worker, null);
 	    if (this._terminateOnError) {
 	        this.terminate();
 	    } else {
@@ -132,72 +129,80 @@ return /******/ (function(modules) { // webpackBootstrap
 	    if (this._terminated)
 	        return;
 	    this._working--;
-	    if (this._callbacks[event.data.id]) {
-	        this._callbacks[event.data.id](null, event.data.data);
-	        delete this._callbacks[event.data.id];
-	        worker.running = false;
+	    worker.running = false;
+	    var callback = this._workers.get(worker);
+	    if (callback) {
+	        callback[0](event.data.data);
 	    }
+	    this._workers.set(worker, null);
 	    this._exec();
 	};
 
 	WorkerManager.prototype._exec = function () {
-	    if (this._working === this._numWorkers || this._waiting.length === 0)
-	        return;
-	    for (var i = 0; i < this._numWorkers; i++) {
-	        if (!this._workers[i].running) {
-	            var id = this._id++;
-	            var execInfo = this._waiting.shift();
-	            var worker = this._workers[i];
-	            worker.postMessage({
-	                action: 'exec',
-	                id: id,
-	                event: execInfo[0],
-	                args: execInfo[1]
-	            });
-	            worker.running = true;
-	            worker.time = Date.now();
-	            this._callbacks[id] = execInfo[2] || noop;
-	            this._working++;
-	            break;
+	    for (var worker of this._workers.keys()) {
+	        if (this._working === this._numWorkers ||
+	            this._waiting.length === 0) {
+	            return;
+	        }
+	        if (!worker.running) {
+	            for (var i = 0; i < this._waiting.length; i++) {
+	                var execInfo = this._waiting[i];
+	                if (typeof execInfo[3] === 'number' && execInfo[3] !== worker.id) {
+	                    // this message is intended to another worker, let's ignore it
+	                    continue;
+	                }
+	                this._waiting.splice(i, 1);
+	                worker.postMessage({
+	                    action: 'exec',
+	                    event: execInfo[0],
+	                    args: execInfo[1]
+	                });
+	                worker.running = true;
+	                worker.time = Date.now();
+	                this._workers.set(worker, execInfo[2]);
+	                this._working++;
+	                break;
+	            }
 	        }
 	    }
 	};
 
 	WorkerManager.prototype.terminate = function () {
-	    if (this._terminated)
-	        return;
-	    for (var i = 0; i < this._numWorkers; i++) {
-	        this._workers[i].terminate();
+	    if (this._terminated) return;
+	    for (var entry of this._workers) {
+	        entry[0].terminate();
+	        if (entry[1]) {
+	            entry[1][1](new Error('Terminated'));
+	        }
 	    }
+	    this._workers.clear();
+	    this._waiting = [];
+	    this._working = 0;
 	    this._terminated = true;
 	};
 
 	WorkerManager.prototype.postAll = function (event, args) {
 	    if (this._terminated)
 	        throw new Error('Cannot post (terminated)');
-	    args = args || [];
-	    if (!Array.isArray(args))
-	        args = [args];
-	    for (var i = 0; i < this._numWorkers; i++) {
-	        this._workers[i].postMessage({
-	            action: 'exec',
-	            event: event,
-	            args: args
-	        });
+	    var promises = [];
+	    for (var worker of this._workers.keys()) {
+	        promises.push(this.post(event, args, worker.id));
 	    }
+	    return Promise.all(promises);
 	};
 
-	WorkerManager.prototype.post = function (event, args, callback) {
-	    if (this._terminated)
-	        throw new Error('Cannot post (terminated)');
-	    if (typeof args === 'function') {
-	        callback = args;
-	        args = [];
-	    } else if (!Array.isArray(args)) {
+	WorkerManager.prototype.post = function (event, args, id) {
+	    if (args === undefined) args = [];
+	    if (!Array.isArray(args)) {
 	        args = [args];
 	    }
-	    this._waiting.push([event, args, callback]);
-	    this._exec();
+
+	    var self = this;
+	    return new Promise(function (resolve, reject) {
+	        if (self._terminated) throw new Error('Cannot post (terminated)');
+	        self._waiting.push([event, args, [resolve, reject], id]);
+	        self._exec();
+	    });
 	};
 
 	module.exports = WorkerManager;
@@ -210,7 +215,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	'use strict';
 
 	var worker = function () {
-	    self.window = self;
+	    var window = self.window = self;
 	    function ManagedWorker() {
 	        this._listeners = {};
 	    }
@@ -252,7 +257,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	var workerStr = worker.toString().split('(("CODE"))');
 
 	exports.newWorkerURL = function newWorkerURL(code, deps) {
-	    var blob = new Blob(['importScripts.apply(self, ' + JSON.stringify(deps) + ');(', workerStr[0], '(', code, ')();', workerStr[1], ')();'], {type: 'application/javascript'});
+	    var blob = new Blob(['(', workerStr[0], 'importScripts.apply(self, ' + JSON.stringify(deps) + ');\n', '(', code, ')();', workerStr[1], ')();'], {type: 'application/javascript'});
 	    return URL.createObjectURL(blob);
 	};
 
