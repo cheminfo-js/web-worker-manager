@@ -1,3 +1,9 @@
+0.1.0 / 2015-09-03
+==================
+
+* import scripts after worker definition
+* correctly handle errors
+
 0.0.4 / 2015-08-10
 ==================
 
