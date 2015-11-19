@@ -37,10 +37,10 @@ var worker = function () {
                 break;
         }
     };
-    (("CODE"))
+    "CODE";
 };
 
-var workerStr = worker.toString().split('(("CODE"))');
+var workerStr = worker.toString().split('"CODE";');
 
 exports.newWorkerURL = function newWorkerURL(code, deps) {
     var blob = new Blob(['(', workerStr[0], 'importScripts.apply(self, ' + JSON.stringify(deps) + ');\n', '(', code, ')();', workerStr[1], ')();'], {type: 'application/javascript'});
