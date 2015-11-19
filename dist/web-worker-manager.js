@@ -74,7 +74,14 @@ return /******/ (function(modules) { // webpackBootstrap
 	    this._workerCode = func.toString();
 
 	    // Parse options
-	    this._numWorkers = (options.maxWorkers > 0) ? Math.min(options.maxWorkers, CORES) : CORES;
+	    if (options.maxWorkers === undefined || options.maxWorkers === 'auto') {
+	        this._numWorkers = Math.min(CORES - 1, 1);
+	    } else if (options.maxWorkers > 0) {
+	        this._numWorkers = Math.min(options.maxWorkers, CORES);
+	    } else {
+	        this._numWorkers = CORES;
+	    }
+
 	    this._workers = new Map();
 	    this._timeout = options.timeout || 0;
 	    this._terminateOnError = !!options.terminateOnError;
@@ -147,7 +154,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	        if (!worker.running) {
 	            for (var i = 0; i < this._waiting.length; i++) {
 	                var execInfo = this._waiting[i];
-	                if (typeof execInfo[3] === 'number' && execInfo[3] !== worker.id) {
+	                if (typeof execInfo[4] === 'number' && execInfo[4] !== worker.id) {
 	                    // this message is intended to another worker, let's ignore it
 	                    continue;
 	                }
@@ -156,10 +163,10 @@ return /******/ (function(modules) { // webpackBootstrap
 	                    action: 'exec',
 	                    event: execInfo[0],
 	                    args: execInfo[1]
-	                });
+	                }, execInfo[2]);
 	                worker.running = true;
 	                worker.time = Date.now();
-	                this._workers.set(worker, execInfo[2]);
+	                this._workers.set(worker, execInfo[3]);
 	                this._working++;
 	                break;
 	            }
@@ -186,21 +193,25 @@ return /******/ (function(modules) { // webpackBootstrap
 	        throw new Error('Cannot post (terminated)');
 	    var promises = [];
 	    for (var worker of this._workers.keys()) {
-	        promises.push(this.post(event, args, worker.id));
+	        promises.push(this.post(event, args, [], worker.id));
 	    }
 	    return Promise.all(promises);
 	};
 
-	WorkerManager.prototype.post = function (event, args, id) {
+	WorkerManager.prototype.post = function (event, args, transferable, id) {
 	    if (args === undefined) args = [];
+	    if (transferable === undefined) transferable = [];
 	    if (!Array.isArray(args)) {
 	        args = [args];
+	    }
+	    if (!Array.isArray(transferable)) {
+	        transferable = [transferable];
 	    }
 
 	    var self = this;
 	    return new Promise(function (resolve, reject) {
 	        if (self._terminated) throw new Error('Cannot post (terminated)');
-	        self._waiting.push([event, args, [resolve, reject], id]);
+	        self._waiting.push([event, args, transferable, [resolve, reject], id]);
 	        self._exec();
 	    });
 	};
@@ -226,11 +237,16 @@ return /******/ (function(modules) { // webpackBootstrap
 	            throw new TypeError('callback argument must be a function');
 	        this._listeners[event] = callback;
 	    };
-	    ManagedWorker.prototype._send = function (id, data) {
+	    ManagedWorker.prototype._send = function (id, data, transferable) {
+	        if (transferable === undefined) {
+	            transferable = [];
+	        } else if (!Array.isArray(transferable)) {
+	            transferable = [transferable];
+	        }
 	        self.postMessage({
 	            id: id,
 	            data: data
-	        });
+	        }, transferable);
 	    };
 	    ManagedWorker.prototype._trigger = function (event, args) {
 	        if (!this._listeners[event])
@@ -241,14 +257,16 @@ return /******/ (function(modules) { // webpackBootstrap
 	    self.onmessage = function (event) {
 	        switch(event.data.action) {
 	            case 'exec':
-	                event.data.args.unshift(function (data) {
-	                    worker._send(event.data.id, data);
+	                event.data.args.unshift(function (data, transferable) {
+	                    worker._send(event.data.id, data, transferable);
 	                });
 	                worker._trigger(event.data.event, event.data.args);
 	                break;
 	            case 'ping':
-	                worker.send(event.data.id, 'pong');
+	                worker._send(event.data.id, 'pong');
 	                break;
+	            default:
+	                throw new Error('unexpected action: ' + event.data.action);
 	        }
 	    };
 	    "CODE";
