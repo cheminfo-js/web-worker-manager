@@ -91,7 +91,7 @@ WorkerManager.prototype._exec = function () {
         if (!worker.running) {
             for (var i = 0; i < this._waiting.length; i++) {
                 var execInfo = this._waiting[i];
-                if (typeof execInfo[3] === 'number' && execInfo[3] !== worker.id) {
+                if (typeof execInfo[4] === 'number' && execInfo[4] !== worker.id) {
                     // this message is intended to another worker, let's ignore it
                     continue;
                 }
@@ -100,10 +100,10 @@ WorkerManager.prototype._exec = function () {
                     action: 'exec',
                     event: execInfo[0],
                     args: execInfo[1]
-                });
+                }, execInfo[2]);
                 worker.running = true;
                 worker.time = Date.now();
-                this._workers.set(worker, execInfo[2]);
+                this._workers.set(worker, execInfo[3]);
                 this._working++;
                 break;
             }
@@ -130,21 +130,25 @@ WorkerManager.prototype.postAll = function (event, args) {
         throw new Error('Cannot post (terminated)');
     var promises = [];
     for (var worker of this._workers.keys()) {
-        promises.push(this.post(event, args, worker.id));
+        promises.push(this.post(event, args, [], worker.id));
     }
     return Promise.all(promises);
 };
 
-WorkerManager.prototype.post = function (event, args, id) {
+WorkerManager.prototype.post = function (event, args, transferable, id) {
     if (args === undefined) args = [];
+    if (transferable === undefined) transferable = [];
     if (!Array.isArray(args)) {
         args = [args];
+    }
+    if (!Array.isArray(transferable)) {
+        transferable = [transferable];
     }
 
     var self = this;
     return new Promise(function (resolve, reject) {
         if (self._terminated) throw new Error('Cannot post (terminated)');
-        self._waiting.push([event, args, [resolve, reject], id]);
+        self._waiting.push([event, args, transferable, [resolve, reject], id]);
         self._exec();
     });
 };

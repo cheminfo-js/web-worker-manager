@@ -12,11 +12,16 @@ var worker = function () {
             throw new TypeError('callback argument must be a function');
         this._listeners[event] = callback;
     };
-    ManagedWorker.prototype._send = function (id, data) {
+    ManagedWorker.prototype._send = function (id, data, transferable) {
+        if (transferable === undefined) {
+            transferable = [];
+        } else if (!Array.isArray(transferable)) {
+            transferable = [transferable];
+        }
         self.postMessage({
             id: id,
             data: data
-        });
+        }, transferable);
     };
     ManagedWorker.prototype._trigger = function (event, args) {
         if (!this._listeners[event])
@@ -27,14 +32,16 @@ var worker = function () {
     self.onmessage = function (event) {
         switch(event.data.action) {
             case 'exec':
-                event.data.args.unshift(function (data) {
-                    worker._send(event.data.id, data);
+                event.data.args.unshift(function (data, transferable) {
+                    worker._send(event.data.id, data, transferable);
                 });
                 worker._trigger(event.data.event, event.data.args);
                 break;
             case 'ping':
-                worker.send(event.data.id, 'pong');
+                worker._send(event.data.id, 'pong');
                 break;
+            default:
+                throw new Error('unexpected action: ' + event.data.action);
         }
     };
     "CODE";
