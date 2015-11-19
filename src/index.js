@@ -18,7 +18,14 @@ function WorkerManager(func, options) {
     this._workerCode = func.toString();
 
     // Parse options
-    this._numWorkers = (options.maxWorkers > 0) ? Math.min(options.maxWorkers, CORES) : CORES;
+    if (options.maxWorkers === undefined || options.maxWorkers === 'auto') {
+        this._numWorkers = Math.min(CORES - 1, 1);
+    } else if (options.maxWorkers > 0) {
+        this._numWorkers = Math.min(options.maxWorkers, CORES);
+    } else {
+        this._numWorkers = CORES;
+    }
+
     this._workers = new Map();
     this._timeout = options.timeout || 0;
     this._terminateOnError = !!options.terminateOnError;

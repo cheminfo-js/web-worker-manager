@@ -1,6 +1,7 @@
 0.2.0 / 2015-11-19
 ==================
 
+* numWorkers option now defaults to CORES-1
 * allow to send transferable objects
 
 0.1.1 / 2015-11-19
